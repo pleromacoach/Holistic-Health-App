@@ -8,8 +8,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- 引入 Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- 引入 html2pdf 用於 PDF 輸出 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
 
@@ -70,6 +68,67 @@
         .score-3 { background-color: #fef3c7; color: #92400e; } /* Yellow */
         .score-2 { background-color: #ffedd5; color: #9a3412; } /* Orange */
         .score-1 { background-color: #fee2e2; color: #991b1b; } /* Red - Worst */
+
+        /* 列印樣式優化 (Print styles for PDF generation) */
+        @media print {
+            @page { margin: 10mm; }
+            
+            /* 1. 解除最高層級容器的 Flexbox 與高度限制，防止內容被截斷 (徹底修復 Tab 7, 8 印不出來的問題) */
+            html, body {
+                background-color: #ffffff !important;
+                height: auto !important;
+                min-height: auto !important;
+                overflow: visible !important;
+                display: block !important;
+            }
+            body.flex { display: block !important; }
+            main { display: block !important; height: auto !important; overflow: visible !important; }
+            
+            /* 移除主卡片的裁切設定 */
+            main > div { 
+                display: block !important; 
+                height: auto !important; 
+                min-height: auto !important; 
+                overflow: visible !important;
+                box-shadow: none !important; 
+                border: none !important;
+            }
+            /* 移除內容區的邊距，讓空間最大化 */
+            main > div > div:last-child {
+                display: block !important;
+                height: auto !important;
+                padding: 0 !important;
+                background-color: transparent !important;
+            }
+
+            /* 2. 隱藏不必要的導航、按鈕，以及「輸入用」的頁籤 (消除多餘的空白頁與冗餘資訊，讓報告更專業) */
+            header, footer, nav, #btn-save-cloud { display: none !important; }
+            #tab-personal, #tab-history, #tab-mental, #tab-fitness, #tab-lab { display: none !important; }
+            
+            /* 3. 強制且連續顯示所有「結果報告」頁籤 (Tabs 6, 7, 8) */
+            #tab-score, #tab-report, #tab-recommend { 
+                display: block !important; 
+                opacity: 1 !important; 
+                margin-bottom: 2rem !important;
+            }
+
+            /* 4. 保留背景顏色與圖表渲染 */
+            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            
+            /* 5. 避免元素在列印時被從中間切斷 (修復出現大片空白頁的問題：精準鎖定特定元素，而非整個大區塊) */
+            tr, .bg-white.p-6.rounded-lg, canvas, .grid > div { 
+                page-break-inside: avoid !important; 
+                break-inside: avoid !important; 
+            }
+            h2, h3, h4 { 
+                page-break-after: avoid !important; 
+                break-after: avoid !important; 
+                margin-top: 1.5rem !important;
+            }
+            
+            /* 將陰影轉換為實線邊框以利列印清晰度 */
+            .shadow-md, .shadow-sm, .shadow-lg, .shadow-xl { box-shadow: none !important; border: 1px solid #e5e7eb !important; }
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col text-gray-800">
@@ -2107,7 +2166,7 @@
 <div class="flex justify-center mt-8 mb-12">
     <button onclick="saveDataToCloud()" id="btn-save-cloud" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-colors flex items-center">
         <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
-        儲存及輸出PDF報告 (Save Generate Report PDF)
+        儲存並輸出報告PDF (Save and Generate Report PDF)
     </button>
 </div>
                 </div>
@@ -6549,210 +6608,12 @@
                 </tr>
             `;
         }
-
-// --- PDF 生成邏輯 ---
-async function generatePDF() {
-    // 1. 確保回到網頁頂部，避免 html2canvas 截圖偏移
-    window.scrollTo(0, 0);
-
-    // 2. 建立一個覆蓋全螢幕的 Loading 遮罩，防止畫面閃爍與破圖
-    const overlay = document.createElement('div');
-    overlay.style.position = 'fixed';
-    overlay.style.top = '0';
-    overlay.style.left = '0';
-    overlay.style.width = '100vw';
-    overlay.style.height = '100vh';
-    overlay.style.backgroundColor = 'rgba(255, 255, 255, 1)'; // 實體白色背景
-    overlay.style.zIndex = '99999';
-    overlay.style.display = 'flex';
-    overlay.style.flexDirection = 'column';
-    overlay.style.justifyContent = 'center';
-    overlay.style.alignItems = 'center';
-    overlay.innerHTML = `
-        <div style="border-top-color: #2563eb;" class="animate-spin rounded-full h-16 w-16 border-4 border-gray-200 mb-4"></div>
-        <h2 class="text-xl font-bold text-gray-800">正在生成高畫質 PDF 報告...</h2>
-        <p class="text-gray-500 mt-2 text-sm">請稍候，這可能需要幾秒鐘 (Generating PDF...)</p>
-    `;
-    document.body.appendChild(overlay);
-
-    // 確保 Loading 畫面先渲染出來
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    try {
-        const tabScore = document.getElementById('tab-score');
-        const tabReport = document.getElementById('tab-report'); // 取得 Tab 7
-        const tabRecommend = document.getElementById('tab-recommend');
-        
-        // 3. 複製 Tab 6 (分數), Tab 7 (報告) 與 Tab 8 (建議)
-        const cloneWrapper = document.createElement('div');
-        cloneWrapper.style.width = '100%';
-
-        const cloneScore = tabScore.cloneNode(true);
-        cloneScore.style.display = 'block'; 
-        cloneScore.style.width = '100%';
-
-        const cloneReport = tabReport.cloneNode(true);
-        cloneReport.style.display = 'block'; 
-        cloneReport.style.width = '100%';
-        cloneReport.style.paddingTop = '20px';
-
-        const cloneRecommend = tabRecommend.cloneNode(true);
-        cloneRecommend.style.display = 'block'; 
-        cloneRecommend.style.width = '100%';
-        cloneRecommend.style.paddingTop = '20px';
-        
-        // 4. 將所有的 canvas (圖表) 轉換成圖片，以便 html2pdf 正確渲染
-        const originalCanvases = document.querySelectorAll('#tab-score canvas, #tab-report canvas, #tab-recommend canvas');
-        
-        // 先將 clones 加入 wrapper 中以便統一 querySelector
-        cloneWrapper.appendChild(cloneScore);
-        
-        const pageBreakClass = 'html2pdf__page-break';
-        
-        // 插入主分頁符號 (Tab 6 與 Tab 8 之間)
-        const mainPb1 = document.createElement('div');
-        mainPb1.className = pageBreakClass;
-        cloneWrapper.appendChild(mainPb1);
-        cloneWrapper.appendChild(cloneRecommend);
-
-        // 插入主分頁符號 (Tab 8 與 Tab 7 之間)
-        const mainPb2 = document.createElement('div');
-        mainPb2.className = pageBreakClass;
-        cloneWrapper.appendChild(mainPb2);
-        cloneWrapper.appendChild(cloneReport);
-
-        const clonedCanvases = cloneWrapper.querySelectorAll('canvas');
-        originalCanvases.forEach((canvas, index) => {
-            if(clonedCanvases[index]) {
-                try {
-                    const img = document.createElement('img');
-                    img.src = canvas.toDataURL('image/png', 1.0);
-                    img.style.width = canvas.style.width || canvas.offsetWidth + 'px';
-                    img.style.height = canvas.style.height || canvas.offsetHeight + 'px';
-                    img.className = clonedCanvases[index].className;
-                    clonedCanvases[index].parentNode.replaceChild(img, clonedCanvases[index]);
-                } catch(err) {
-                    console.warn("Canvas export issue:", err);
-                }
-            }
-        });
-
-        // 5. 建立外部容器 (A4 橫式寬度約 1122px)
-        const pdfContainer = document.createElement('div');
-        pdfContainer.id = 'pdf-export-container';
-        pdfContainer.style.width = '1122px'; 
-        pdfContainer.style.padding = '40px'; 
-        pdfContainer.style.backgroundColor = '#ffffff'; 
-        pdfContainer.style.margin = '0 auto'; // 置中
-        
-        // 6. 新增用戶名稱與報告標題
-        const userName = appData.personal.name || '用戶';
-        const titleDate = new Date().toLocaleDateString('zh-TW');
-        const titleHtml = `
-          <div style="text-align: center; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e5e7eb;">
-            <h1 style="font-size: 32px; font-weight: bold; color: #1f2937;">${userName} 的全人健康報告</h1>
-            <p style="color: #6b7280; font-size: 14px; margin-top: 8px;">報告生成日期 (Generated Date)：${titleDate}</p>
-          </div>
-        `;
-        cloneWrapper.insertAdjacentHTML('afterbegin', titleHtml);
-
-        // 7. 設定內部區塊的分頁
-        // 針對 Tab 6: 將雷達圖獨立一頁
-        const scoreH3s = cloneScore.querySelectorAll('h3');
-        scoreH3s.forEach(h => {
-            if (h.textContent.includes('全人健康雷達分析')) {
-                const pb = document.createElement('div');
-                pb.className = pageBreakClass;
-                const radarContainer = h.closest('.bg-white'); // 抓取包含雷達圖的白色卡片容器
-                if (radarContainer && radarContainer.parentNode) {
-                    radarContainer.parentNode.insertBefore(pb, radarContainer);
-                }
-            }
-        });
-        
-        const scoreH2s = cloneScore.querySelectorAll('h2');
-        scoreH2s.forEach(h => {
-            if (h.textContent.includes('生物標記健康總分')) {
-                const pb = document.createElement('div');
-                pb.className = pageBreakClass;
-                h.parentNode.insertBefore(pb, h);
-                h.style.paddingTop = '20px';
-            }
-        });
-
-        // 針對 Tab 6: 內部區塊強制分頁
-        const scoreSections = cloneScore.querySelectorAll('div.mt-12');
-        scoreSections.forEach(sec => {
-            const pb = document.createElement('div');
-            pb.className = pageBreakClass;
-            sec.parentNode.insertBefore(pb, sec);
-            sec.classList.remove('mt-12', 'pt-8', 'border-t');
-            sec.style.paddingTop = '20px';
-        });
-
-        // 移除複製版中的儲存按鈕
-        const saveBtn = cloneWrapper.querySelector('#btn-save-cloud');
-        if (saveBtn && saveBtn.parentNode) {
-            saveBtn.parentNode.remove();
-        }
-
-        pdfContainer.appendChild(cloneWrapper);
-
-        // 8. 關鍵修復：暫時隱藏原本的 UI，讓 PDF 容器成為標準文件流 (Normal flow)
-        // 這樣 html2canvas 就能完美抓取尺寸與內容，使用者因為有 overlay 擋住所以不會察覺
-        const mainEl = document.querySelector('main');
-        const headerEl = document.querySelector('header');
-        const footerEl = document.querySelector('footer');
-        
-        if(mainEl) mainEl.style.display = 'none';
-        if(headerEl) headerEl.style.display = 'none';
-        if(footerEl) footerEl.style.display = 'none';
-
-        document.body.appendChild(pdfContainer);
-
-        // 強制重繪與等待渲染 (給予充分時間讓 Tailwind 載入與圖片繪製)
-        await new Promise(resolve => setTimeout(resolve, 800));
-
-        // 9. html2pdf 設定：A4、橫式、0 margin (靠 padding 撐開)
-        const opt = {
-            margin: 0,
-            filename: `${userName}_全人健康報告.pdf`,
-            image: { type: 'jpeg', quality: 1.0 },
-            html2canvas: { 
-                scale: 2, 
-                useCORS: true, 
-                logging: false, 
-                windowWidth: 1122,
-                scrollY: 0,
-                scrollX: 0
-            },
-            jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-            pagebreak: { mode: ['css', 'legacy'] }
-        };
-
-        await html2pdf().set(opt).from(pdfContainer).save();
-        
-        // 10. 清除暫存容器並恢復原本的 UI
-        document.body.removeChild(pdfContainer);
-        if(mainEl) mainEl.style.display = '';
-        if(headerEl) headerEl.style.display = '';
-        if(footerEl) footerEl.style.display = '';
-
-    } catch(e) {
-        console.error('PDF Generation Error', e);
-        alert("PDF 生成失敗，請再試一次。");
-    } finally {
-        // 移除 Loading 遮罩
-        document.body.removeChild(overlay);
-    }
-}
-
         // --- 雲端資料庫儲存邏輯 ---
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw7tUY-Nh1-funsCiNrFqVDOuIkxbZvAnDUhHeiVy9iRZn7vSdxTJcX9OcznELHEvsS/exec"; // 填入你的 Web App URL
 
 async function saveDataToCloud() {
     const btn = document.getElementById('btn-save-cloud');
-    btn.innerHTML = `<svg class="animate-spin w-5 h-5 mr-2 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存與生成中...`;
+    btn.innerHTML = `<svg class="animate-spin w-5 h-5 mr-2 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存中...`;
     btn.disabled = true;
     btn.classList.add("opacity-75", "cursor-not-allowed");
 
@@ -6760,9 +6621,6 @@ async function saveDataToCloud() {
     const getTxt = (id) => document.getElementById(id) ? document.getElementById(id).textContent.trim() : "";
 
     try {
-        // 先生成並下載 PDF 報告
-        await generatePDF();
-
         // 整理所有要傳送的 payload 資料
         const payload = {
             name: appData.personal.name || "未填寫",
@@ -6819,25 +6677,30 @@ async function saveDataToCloud() {
         const result = await response.json();
         
         if (result.status === "success") {
-            alert("✅ 資料已成功儲存至健康資料庫，並已開始下載 PDF 報告！");
-            btn.innerHTML = `<svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 儲存與輸出成功`;
+            alert("✅ 資料已成功儲存至健康資料庫！\n即將為您開啟列印與 PDF 輸出視窗。");
+            btn.innerHTML = `<svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 儲存成功`;
             btn.classList.replace("bg-blue-600", "bg-green-600");
             btn.classList.replace("hover:bg-blue-700", "hover:bg-green-700");
+
+            // 延遲 800 毫秒，讓按鈕的 UI 狀態先更新，再呼叫系統列印/輸出 PDF 功能 (呼叫裝置內建列印功能)
+            setTimeout(() => {
+                window.print();
+            }, 800);
         } else {
             throw new Error(result.message);
         }
 
     } catch (error) {
-        console.error("儲存或輸出失敗:", error);
-        alert("❌ 處理失敗，請檢查網路連線或 API 網址設定是否正確。");
-        btn.innerHTML = `重試儲存與輸出 (Retry)`;
+        console.error("儲存失敗:", error);
+        alert("❌ 儲存失敗，請檢查網路連線或 API 網址設定是否正確。");
+        btn.innerHTML = `重試儲存 (Retry)`;
     } finally {
         // 3秒後將按鈕恢復原狀
         setTimeout(() => {
             btn.disabled = false;
             btn.classList.remove("opacity-75", "cursor-not-allowed", "bg-green-600", "hover:bg-green-700");
             btn.classList.add("bg-blue-600", "hover:bg-blue-700");
-            btn.innerHTML = `<svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg> 儲存及輸出PDF報告 (Save Generate Report PDF)`;
+            btn.innerHTML = `<svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg> 儲存並輸出報告PDF (Save and Generate Report PDF)`;
         }, 3000);
     }
 }
